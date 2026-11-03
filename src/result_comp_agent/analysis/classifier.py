@@ -55,8 +55,16 @@ def classify(ch: Change) -> tuple[str, str]:
         return "STRUCTURE_CHANGE", "R03_structure"
     if ct == ChangeType.CELL_MODIFIED and ch.detail.get("is_header"):
         return "STRUCTURE_CHANGE", "R04_header_renamed"
-    if part == "title" and ct == ChangeType.TEXT_MODIFIED:
-        return "STRUCTURE_CHANGE", "R05_slide_title_changed"
+    if part in ("title", "heading") and ct == ChangeType.TEXT_MODIFIED:
+        return "STRUCTURE_CHANGE", "R05_title_or_heading_changed"
+    if part == "heading" and ct in (ChangeType.TEXT_ADDED, ChangeType.TEXT_REMOVED):
+        return "STRUCTURE_CHANGE", "R05b_section_added_or_removed"
+    if ct == ChangeType.SHEET_PROPERTY_CHANGED:
+        return "STRUCTURE_CHANGE", "R20_input_rule"
+    if ct == ChangeType.TABLE_ADDED:
+        return "CONTENT_ADDITION", "R07_added"
+    if ct == ChangeType.TABLE_REMOVED:
+        return "CONTENT_REMOVAL", "R08_removed"
     if ct in (ChangeType.IMAGE_REPLACED, ChangeType.CHART_MODIFIED):
         return "VISUAL_CHANGE", "R06_visual"
     if ct == ChangeType.SHAPE_ADDED:

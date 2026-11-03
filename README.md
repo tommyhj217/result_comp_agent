@@ -1,13 +1,91 @@
 # result_comp_agent
 
-**제품개발 프로세스 에이전트 산출물(PPT · Excel) 비교 → 사용자 보완 분석 → 에이전트 코드 개선 권고** 를 수행하는 분석 에이전트입니다.
-Azure OpenAI 의 **GPT-6 시리즈**(gpt-6 / gpt-6-mini 배포)를 해석·개선안 작성에 사용하며, **신뢰도**를 최우선으로 설계했습니다.
+**제품개발 프로세스 에이전트 산출물(Excel · PPT · Word · CSV · Markdown · PDF) 비교 → 사용자 보완 분석 → 에이전트 코드 개선 권고** 를 수행하는 분석 에이전트입니다.
+Azure OpenAI 의 **GPT 배포**(`.env` 의 4개 키)를 해석·개선안 작성에 사용하며, **신뢰도**를 최우선으로 설계했습니다.
 
 이 에이전트는 세 가지 질문에 근거와 함께 답합니다.
 
-1. **산출물에서 무엇이 달라졌는가?** — 에이전트가 만든 원본과 사용자 최종본의 셀·행·열·시트 / 슬라이드·도형·문단·표·노트 단위 차이
+1. **산출물에서 무엇이 달라졌는가?** — 에이전트 원본과 사용자 최종본의 셀·행·열·시트 / 슬라이드·도형·문단·표·노트 / 섹션·문단·표·메모 단위 차이
 2. **사용자는 무엇을 보완했는가?** — 보완 유형(내용 추가, 값 정정, 구체화, 구조 변경 …), 여러 사용자에게 반복되는 패턴, 사용자가 코드 브랜치에 직접 넣은 보완
 3. **에이전트 코드에서 무엇을 고쳐야 하는가?** — git 의 에이전트 코드에서 해당 산출물을 만든 위치(파일:줄, 함수, 프롬프트, 컬럼/섹션 정의)와 적용 가능한 수정 패치
+
+---
+
+## 빠른 시작
+
+```bash
+pip install -e .                 # Python 3.10+   (PDF 비교: pip install -e ".[pdf]")
+cp .env.example .env             # Azure OpenAI 4개 키 입력 (없으면 규칙 기반으로 동작)
+rca check-env --probe            # .env 점검 + 실제 GPT 배포 호출 확인
+
+python examples/build_demo.py demo_workspace     # 샘플 에이전트 git 저장소·산출물·사용자 수정본·설정 생성
+rca run -c demo_workspace/config.yaml            # → demo_workspace/rca_output/report.{md,xlsx,html} · analysis.json
+```
+
+---
+
+## Azure OpenAI(GPT) 설정 — `.env`
+
+```dotenv
+AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com
+AZURE_OPENAI_API_KEY=<api-key>
+AZURE_OPENAI_DEPLOYMENT=<GPT 배포 이름>      # Azure 포털 > 배포 '이름' (모델명 아님)
+AZURE_OPENAI_API_VERSION=2024-10-21           # 2025-04-01-preview 등, v1 엔드포인트면 v1
+```
+
+- **탐색 순서**: `--env-file` → `RCA_ENV_FILE` → 설정 파일 폴더의 `.env` → 현재 폴더의 `.env`. 실제 환경변수가 `.env` 보다 우선(`--env-override` 로 반대).
+- **오타·별칭 허용**: `AZUTE_OPEN_API_VERSION`, `AZURE_OPEN_API_VERSION`, `AZURE_OPENAI_DEPLOYMENT_NAME` 등도 읽고, `rca check-env` 가 표준 이름 사용을 안내합니다.
+- **전체 URL 붙여넣기 허용**: `…/openai/deployments/<배포>/chat/completions?api-version=…` 형태면 엔드포인트·배포·버전을 분해해 사용합니다.
+- 선택 키: `AZURE_OPENAI_DEPLOYMENT_FAST`(교차검증용, 없으면 같은 배포), `AZURE_OPENAI_TIMEOUT`(호출당 초), `RCA_LLM_BUDGET_SECONDS`(전체 예산), `AZURE_OPENAI_REASONING_EFFORT`, `AZURE_OPENAI_TEMPERATURE`, `AZURE_OPENAI_SEED`, `AZURE_OPENAI_USE_ENTRA_ID` — `.env.example` 참고.
+
+```text
+$ rca check-env --probe
+.env 파일: /work/.env
+  AZURE_OPENAI_ENDPOINT     = https://my-res.openai.azure.com   [.env]
+  AZURE_OPENAI_API_KEY      = abc1…tkey                          [.env]
+  AZURE_OPENAI_DEPLOYMENT   = gpt-4o-prod                        [.env]
+  AZURE_OPENAI_API_VERSION  = 2024-10-21                         [.env] (키 'AZUTE_OPEN_API_VERSION')
+  ⚠ 'AZUTE_OPEN_API_VERSION' 키를 'AZURE_OPENAI_API_VERSION' 로 해석했습니다 — 표준 이름 사용을 권장합니다
+배포 'gpt-4o-prod' 점검 중…
+  ✅ 응답 성공 (1.2초) · 응답 모델: gpt-4o-2024-08-06
+  응답 형식: json_schema · 토큰 파라미터: max_completion_tokens · 함수 호출: supported
+```
+
+### 배포된 GPT 모델에 맞춘 자동 적응
+
+GPT 모델·api-version 마다 지원 파라미터가 다르므로, 400 응답의 `param` 을 보고 **배포별로 학습**합니다(`.rca_cache/llm/capabilities.json` 에 저장 → 다음 실행부터 실패 호출 없음).
+
+| 상황 | 자동 처리 |
+|---|---|
+| `reasoning_effort` / `temperature` / `seed` 미지원 | 해당 파라미터 제외 |
+| `max_completion_tokens` ↔ `max_tokens` | 모델이 요구하는 쪽으로 전환 |
+| Structured Outputs(`json_schema`) 미지원 (구버전 api-version 등) | `json_object` → 프롬프트 지시로 단계적 하향, **로컬 스키마 검증은 항상 유지** |
+| 함수 호출(`tools`) 미지원 | 도구 없이 사전 수집 컨텍스트로 진행 |
+| 응답 모델 | 실제 응답의 `model`(예: `gpt-4o-2024-08-06`)을 보고서에 표시 |
+
+---
+
+## 실패 표시 · 시간 초과 · strict
+
+모든 실패는 **범주·단계·종류·대상·내용·영향**으로 기록되어 보고서(HTML/MD/Excel `실패내역`/JSON)와 콘솔에 표시됩니다. 실행 결과는 `성공 / 부분 실패 / 실패` 로 요약됩니다.
+
+| 범주 | 예 | 처리 |
+|---|---|---|
+| `comparison` 산출물 비교 | 파일 없음, 손상/암호 문서, 지원하지 않는 형식, 형식 불일치, **비교 시간 초과**, 비교 프로세스 비정상 종료 | 해당 비교쌍만 제외하고 계속 |
+| `integrity` 무결성 | 원본+변경목록≠수정본 | 결과는 참고용으로 표시 |
+| `llm` GPT | **시간 초과**, 연결, 인증, 배포 없음, 요청 한도, 콘텐츠 필터, 응답 검증 실패, 시간 예산 소진 | 규칙 기반 결과로 대체하고 '영향'에 명시 |
+| `code` 에이전트 코드 | 브랜치/커밋 없음, 클론 실패, 코드 파일 없음 | 코드 추적 없이 진행 |
+| `report` / `config` | 보고서 형식별 작성 실패, 플러그인 로드 실패, `.env` 불완전 | 다른 형식은 계속 작성 |
+
+- **비교 시간 초과**: 비교쌍마다 별도 프로세스에서 실행하고 `diff.timeout_seconds`(기본 300초, `--timeout`)를 넘기면 프로세스를 종료하고 실패로 표시합니다.
+- **GPT 시간 초과**: 호출당 `AZURE_OPENAI_TIMEOUT`(기본 120초, `--llm-timeout`), 일시적 오류(시간초과·연결·429·5xx)만 백오프 재시도(Retry-After 준수). 인증 오류·배포 없음은 **회로 차단**해 이후 호출을 즉시 실패시키고, 전체 예산(`RCA_LLM_BUDGET_SECONDS`, `--llm-budget`)을 넘기면 남은 GPT 단계는 실패로 표시됩니다.
+- **strict**: `--strict`(또는 `strict.enabled`)이면 `fail_on` 범주의 실패가 있을 때 실패 종료코드를 반환합니다. `--strict-on comparison,integrity` 로 범주 지정, `--fail-fast` 는 첫 실패에서 분석을 중단합니다. 보고서는 항상 작성됩니다.
+
+| 종료코드 | 의미 |
+|---|---|
+| 0 | 성공 (strict 미사용 시 부분 실패 포함) |
+| 1 | 분석 실패 (모든 비교 실패 등) |
+| 2 / 3 / 4 / 5 / 6 / 7 | strict 위반: 무결성 / 비교 / GPT / 코드 / 보고서 / 설정 |
 
 ---
 
@@ -15,18 +93,68 @@ Azure OpenAI 의 **GPT-6 시리즈**(gpt-6 / gpt-6-mini 배포)를 해석·개�
 
 | 원칙 | 구현 |
 |---|---|
-| **차이 검출은 LLM 을 쓰지 않는다** | 결정론적 diff 엔진이 모든 변경을 검출합니다. LLM 은 이미 검출된 변경을 *해석*만 하며 변경을 추가·삭제할 수 없습니다. |
-| **diff 무결성 검증** | 비교쌍마다 `원본 + 보고된 변경 목록 = 수정본` 을 실제로 재구성해 대조합니다. 누락·오보고가 있으면 `FAIL` 과 위치를 보고합니다 (`--strict` 시 종료코드 2). 또한 각 셀 수정의 "이전 값"이 원본과 같은지 검사합니다. |
-| **서식 변경 분리** | `1,000` vs `1000`, 공백, `2025.01.05` vs 날짜, 셀 서식, 도형 위치 변경은 `format_only` 로 분리해 내용 변경과 섞이지 않게 합니다 (숨기지 않고 별도 집계). |
-| **대응(pairing) 근거 기록** | 행은 ID 키 열 → 유사도 DP 순으로 대응하고, 각 변경에 `pairing`(key/header/exact/similarity/moved)과 점수를 남깁니다. 유사도 0.7 미만 대응은 '낮은 신뢰도 대응'으로 집계됩니다. |
-| **코드 추적은 결정론적 매칭** | 컬럼명·시트명·슬라이드 제목·하드코딩 값을 코드 리터럴/프롬프트/템플릿에서 찾고 방식(정확·정규화·부분·유사·형제 컨테이너 추론)과 점수를 기록합니다. 못 찾으면 **'추적 불가'로 정직하게 표시**합니다. |
-| **LLM 출력 근거 검증** | GPT 응답의 `change_id` 실재, 인용 코드(quote)가 해당 파일·줄에 실제 존재하는지 확인합니다. 다른 줄에 있으면 줄 번호를 보정하고, 없으면 제거합니다. 근거가 없는 권고는 **기각(REJECTED)** 되어 본문에서 빠지고 부록에만 남습니다. |
-| **수정 패치 검증** | 제안된 수정의 원본 스니펫이 파일에 **정확히 1회** 존재해야 하며, Python 은 적용 후 구문 검사를 통과해야 unified diff 패치를 생성합니다. |
-| **자기 교정 루프** | 스키마 위반은 오류를 알려 재요청, 근거 문제(없는 ID·코드에 없는 인용)는 문제 목록을 피드백해 재작성 요청합니다. 끝까지 남은 문제 항목만 검증 단계에서 개별 기각합니다. |
-| **교차 검증** | gpt-6-mini 가 "증거가 권고를 뒷받침하는가"를 판정합니다. `not_supported` 인 LLM 권고는 기각됩니다. |
-| **규칙 기준선 + LLM 재분류 제한** | 규칙 기반 분류는 항상 수행됩니다. LLM 은 내용 계열 유형끼리, 신뢰도 ≥ 0.7 일 때만 재분류할 수 있고(서식/구조/메모 같은 사실 분류는 변경 불가) 규칙-LLM 일치율이 보고됩니다. |
-| **재현성** | Structured Outputs(strict JSON schema), seed 고정, 동일 입력 응답 디스크 캐시 → 같은 입력이면 같은 결과. |
-| **투명한 신뢰도 점수** | `0.4·증거강도 + 0.3·코드근거 + 0.1·수정안유효성 + 0.2·일관성` — 구성 요소를 모두 보고서에 표시합니다. |
+| **차이 검출은 LLM 을 쓰지 않는다** | 결정론적 diff 엔진이 모든 변경을 검출하고, GPT 는 검출된 변경을 *해석*만 합니다. |
+| **diff 무결성 검증** | 모든 형식에서 `원본 + 보고된 변경 목록 = 수정본` 을 실제로 재구성해 대조하고, 각 수정의 "이전 값"이 원본과 같은지 검사합니다. |
+| **서식 변경 분리** | `1,000` vs `1000`, 공백, 날짜 표기, 셀 서식, 도형 위치, 조건부 서식 등은 `format_only` 로 분리합니다 (숨기지 않음). |
+| **대응 근거 기록** | 행은 ID 키 열 → 유사도 DP, 각 변경에 대응 방식·점수를 남기고 낮은 신뢰도 대응을 집계합니다. |
+| **코드 추적은 결정론적 매칭** | 컬럼명·시트명·섹션·하드코딩 값을 코드 리터럴/프롬프트/템플릿에서 찾고 방식·점수를 기록, 못 찾으면 '추적 불가'. |
+| **GPT 출력 근거 검증** | `change_id` 실재, 인용 코드가 해당 파일·줄에 실제 존재하는지 확인(다른 줄이면 보정, 없으면 제거), 근거 없는 권고는 기각해 부록으로. |
+| **수정 패치 검증** | 원본 스니펫이 파일에 **정확히 1회** 존재 + Python 구문 검사 통과 시에만 unified diff 패치 생성. |
+| **자기 교정 루프** | 스키마 위반·근거 문제(없는 ID·코드에 없는 인용)를 GPT 에 피드백해 재작성, 끝까지 남은 항목만 개별 기각. |
+| **교차 검증·재현성** | 교차검증 배포가 "증거가 권고를 뒷받침하는가"를 판정. Structured Outputs·seed·응답 캐시로 같은 입력 → 같은 결과. |
+| **투명한 신뢰도 점수** | `0.4·증거강도 + 0.3·코드근거 + 0.1·수정안유효성 + 0.2·일관성`, 구성 요소를 모두 표시. |
+
+---
+
+## 지원 문서 형식 (`rca tools`, `rca inspect <파일>`)
+
+| 형식 | 비교 범위 |
+|---|---|
+| Excel `.xlsx/.xlsm` | 시트·행·열·셀 값·수식(참조 이동 표시)·메모·서식 + **데이터 유효성(입력 규칙)·조건부 서식·병합 셀·틀 고정·자동 필터·시트 표시 상태** (범위는 열 헤더 이름 기준 비교 → 행 삽입에 흔들리지 않음) |
+| PowerPoint `.pptx` | 슬라이드(추가/삭제/이동/레이아웃)·도형·문단·표·차트 데이터·이미지·**SmartArt 텍스트**·발표자 노트 |
+| Word `.docx` | 제목(섹션)·문단·목록·표·메모, **변경 내용 추적이 남은 문서는 '모두 승인' 기준**으로 비교하고 그 사실을 표시 |
+| CSV/TSV | 표 비교 (UTF-8/CP949 인코딩·구분자 자동 판별, 인코딩 차이 표시) |
+| Markdown `.md` / 텍스트 `.txt` | 제목·문단·목록·코드·표 / 줄 단위 |
+| PDF `.pdf` | 페이지별 텍스트 줄 (`pip install pypdf`, 스캔 PDF 는 OCR 필요 안내) |
+
+---
+
+## GPT 도구(함수 호출) — 조회 범위 확장
+
+개선안 단계에서 GPT 는 미리 넣어준 컨텍스트 밖의 코드·문서도 **직접 조회**할 수 있습니다(모두 읽기 전용, 결과 크기 제한, 호출 기록을 보고서에 표시). 도구 조회 결과는 최종 구조화 응답에 텍스트로 전달되어 모델/버전에 무관하게 동작하며, 결과 전체가 캐시됩니다.
+
+| 도구 | 용도 |
+|---|---|
+| `search_code` · `read_code` · `list_code_files` · `list_prompts` | 코드에서 문구 위치 찾기, 줄 번호 포함 원문 읽기(인용·패치용), 프롬프트 위치 |
+| `get_change` · `list_changes` · `get_pattern` | 변경·패턴 상세 조회/필터 |
+| `read_document` · `search_documents` | 원본/수정본 문서 내용 조회 (`요구사항정의서!3:10`, `slide 3`, `¶5`, 섹션 제목) |
+| `get_code_diff` | 사용자 보완 브랜치 등 코드 버전 비교 hunk |
+
+옵션: `llm.use_tools`, `llm.max_tool_steps`, `llm.max_tool_calls`, `llm.tools`(허용 목록), CLI `--no-tools`.
+
+---
+
+## 직접 툴 추가하기 (플러그인)
+
+부족한 기능은 Python 으로 코딩해 **문서 형식 핸들러** 또는 **GPT 도구**로 등록할 수 있습니다. 예시: [`examples/plugins/sample_plugin.py`](examples/plugins/sample_plugin.py) (JSON 산출물 비교 + 변경 집계 도구).
+
+```python
+from result_comp_agent.documents import FlowDocHandler, register_handler
+from result_comp_agent.diff.flow_diff import Block, FlowDoc
+from result_comp_agent.tools import register_tool
+
+class HwpxHandler(FlowDocHandler):          # 흐름형 문서: extract() 만 구현하면 diff·무결성 검증·GPT 조회가 자동 제공
+    name, artifact, extensions = "hwpx", "hwpx", (".hwpx",)
+    def extract(self, path) -> FlowDoc: ...
+
+register_handler(HwpxHandler())
+
+@register_tool("lookup_glossary", "사내 표준 용어 조회", {"type": "object", "properties": {"term": {"type": "string"}}, "required": ["term"]})
+def lookup_glossary(ctx, term):             # ctx: 코드 인덱스·변경·비교쌍·패턴·코드 diff 접근
+    return {"term": term, "standard": "..."}
+```
+
+등록 방법: 설정 `plugins: [my_pkg.rca_plugins, ./plugins/hwpx.py]`, 환경변수 `RCA_PLUGINS`, CLI `--plugin`, 또는 패키지 entry point 그룹 `result_comp_agent.plugins`. 확인: `rca tools -c config.yaml`. 표 형식 문서는 `DocumentHandler.compare()` 에서 기존 grid diff 엔진(`diff_grids` + `verify_grid`)을 재사용하면 됩니다.
 
 ---
 
@@ -34,124 +162,50 @@ Azure OpenAI 의 **GPT-6 시리즈**(gpt-6 / gpt-6-mini 배포)를 해석·개�
 
 ```
                     ┌──────────────── Orchestrator ────────────────┐
- 원본 PPT/Excel ──▶ │ DiffAgent (결정론)                           │
- 수정본 PPT/Excel ─▶ │   추출 → 정렬(키/DP) → 변경 목록 → 무결성 검증 │
+ 원본 문서  ───────▶ │ DiffAgent (결정론, 비교쌍별 프로세스·제한시간) │
+ 수정본 문서 ──────▶ │   문서 핸들러 → 정렬 → 변경 목록 → 무결성 검증  │
                     │ CodeAgent (결정론)                           │◀── git 저장소 (에이전트 코드)
-                    │   코드 인덱스(AST 리터럴/프롬프트/템플릿)       │     · 기준 ref
-                    │   변경→코드 추적 · 사용자 브랜치 diff           │     · 사용자 보완 브랜치
-                    │ SupplementAnalystAgent (규칙 + GPT-6)        │
-                    │   보완 유형 · 사용자 의도 · 에이전트 갭         │
+                    │   코드 인덱스 · 변경→코드 추적 · 브랜치 diff     │
+                    │ SupplementAnalystAgent (규칙 + GPT)           │
                     │ Aggregator (결정론)  반복 패턴 · 공통 패턴      │
-                    │ ImprovementAdvisorAgent (규칙 + GPT-6)       │
-                    │   코드 위치 · 수정안                           │
-                    │ VerifierAgent (결정론 + GPT-6-mini 교차검증)   │
-                    │   근거/인용/패치 검증 · 신뢰도                  │
-                    └──────────────▶ Markdown · Excel · HTML · JSON 보고서
+                    │ ImprovementAdvisorAgent (규칙 + GPT + 도구)    │◀── GPT 도구 레지스트리 (+ 플러그인)
+                    │ VerifierAgent (결정론 + GPT 교차검증)          │
+                    └──────▶ 실패/strict 판정 → Markdown · Excel · HTML · JSON
 ```
 
 ```
 src/result_comp_agent/
-  extractors/   excel.py, pptx.py            산출물 스냅샷 추출
-  diff/         normalize, align, grid,      결정론적 diff + 무결성 검증
-                excel_diff, pptx_diff, compare
-  code/         git_source, indexer,         git 코드 로드 · 인덱싱 · 추적 · 코드 diff
-                tracer, code_diff
-  analysis/     classifier, aggregator,      보완 유형 분류 · 패턴 집계 · 규칙 권고
-                recommender
-  llm/          client, schemas, prompts     Azure OpenAI GPT-6 (structured outputs, 캐시, 재시도)
-  agents/       orchestrator, code_agent,    하위 에이전트
-                supplement_agent, improvement_agent,
-                code_supplement_agent, verifier_agent, grounding
-  report/       markdown, excel, html        보고서
+  documents/    핸들러 레지스트리 + 기본 핸들러(Excel·PPT·Word·CSV·Markdown·텍스트·PDF)
+  extractors/   excel.py, pptx.py, flow.py(Word·MD·TXT·PDF·CSV)
+  diff/         normalize, align, grid(표), flow_diff(흐름 문서), excel_diff, pptx_diff, compare(격리·시간제한)
+  code/         git_source, indexer, tracer, code_diff
+  analysis/     classifier, aggregator, recommender
+  llm/          env(.env 로더), client(적응형 GPT 클라이언트·도구 세션), errors, schemas, prompts
+  tools/        GPT 도구 레지스트리 · 기본 도구 · 컨텍스트
+  agents/       orchestrator, code_agent, supplement_agent, improvement_agent, code_supplement_agent, verifier_agent, grounding
+  report/       markdown, excel, html (원자적 쓰기·섹션 격리)
+  plugins.py    플러그인 로더
 examples/
   pd_agents/    샘플 제품개발 에이전트(시장분석 PPT · 요구사항 Excel · 테스트케이스 Excel)
-  build_demo.py 데모 작업공간(git 저장소 + 산출물 + 사용자 수정본 + 설정) 생성
+  build_demo.py 데모 작업공간 생성
+  plugins/      플러그인 예시
 ```
 
 ---
 
-## 빠른 시작
+## 명령어
 
 ```bash
-pip install -e .            # Python 3.10+
-# (선택) Entra ID 인증: pip install -e ".[entra]"
-
-# 1) 데모: 샘플 에이전트 git 저장소 · 산출물 · 사용자 수정본 생성
-python examples/build_demo.py demo_workspace
-
-# 2) 분석 (Azure 설정이 없으면 규칙 기반으로 실행)
-rca run -c demo_workspace/config.yaml
-#  → demo_workspace/rca_output/report.md | report.xlsx | report.html | analysis.json
+rca run -c config.yaml [--strict] [--strict-on ...] [--fail-fast] [--timeout 300] [--llm-timeout 120] [--llm-budget 1800]
+        [--env-file .env] [--offline] [--no-tools] [--plugin my.py] [--formats md,xlsx,html,json]
+rca diff 원본 수정본 -o out [--repo URL --ref main --paths agents/x]   # 단일 비교
+rca check-env [--probe]                                               # .env·GPT 배포 점검
+rca inspect 파일 [--json]                                             # 문서를 어떻게 읽는지 확인
+rca tools [-c config.yaml]                                            # 문서 핸들러·GPT 도구(플러그인 포함) 목록
+rca code-diff --repo R --base main --head feature/x                   # 코드 버전 비교
 ```
 
-데모에서 확인할 수 있는 결과 예:
-
-- 두 사용자가 모두 요구사항 정의서에 `리스크` 열을 추가 → `requirements_agent.py:17-18 (COLUMNS)` **'우선순위'와 '담당자' 사이**에 추가하라는 권고, 사용자 브랜치 `feature/kim-risk-column` 에 같은 보완이 이미 있다는 근거 첨부
-- 사용자가 `기획팀 → 모바일팀` 수정 → 하드코딩 상수 `DEFAULT_OWNER = "기획팀"` (`requirements_agent.py:21`) 추적
-- 두 사용자가 모두 `가격 전략` 슬라이드 추가 → `SECTIONS` 의 '타겟 고객'과 '결론 및 제언' 사이 삽입 위치
-- 응답시간 `2초 → 1초 (p95)` 정정 → 상세설명 작성 지침이 있는 `SYSTEM_PROMPT` 줄
-
-### 단일 비교 / 코드 비교
-
-```bash
-# 원본 vs 수정본 하나만 (코드 추적 선택)
-rca diff agent_output.xlsx user_final.xlsx -o out --repo https://github.com/org/pd-agents.git --ref main --paths agents/requirements
-
-# 에이전트 코드 ref 간 비교 (사용자 보완 브랜치 등)
-rca code-diff --repo ./pd-agents --base main --head feature/kim-risk-column --paths agents/requirements
-```
-
----
-
-## Azure OpenAI (GPT-6) 설정
-
-`.env.example` 참고. 환경 변수만 설정하면 자동으로 GPT-6 경로가 활성화됩니다 (`llm.enabled: auto`).
-
-| 변수 | 설명 | 기본값 |
-|---|---|---|
-| `AZURE_OPENAI_ENDPOINT` | `https://<resource>.openai.azure.com` | — |
-| `AZURE_OPENAI_API_KEY` / `AZURE_OPENAI_USE_ENTRA_ID` | API 키 또는 Entra ID(DefaultAzureCredential) | — |
-| `AZURE_OPENAI_API_VERSION` | api-version, `v1` 이면 v1 엔드포인트 사용 | `2025-04-01-preview` |
-| `AZURE_OPENAI_DEPLOYMENT_MAIN` | 해석·개선안 배포 이름 | `gpt-6` |
-| `AZURE_OPENAI_DEPLOYMENT_FAST` | 교차검증 배포 이름 | `gpt-6-mini` |
-| `AZURE_OPENAI_REASONING_EFFORT` | 추론 강도 (빈 값이면 미전송) | `medium` |
-| `AZURE_OPENAI_TEMPERATURE` | 추론 모델은 미지원일 수 있어 기본 미전송 | — |
-| `AZURE_OPENAI_SEED` | 재현성 | `42` |
-
-> GPT-6 시리즈의 배포 이름·api-version·지원 파라미터는 조직의 Azure 리소스에 맞게 위 변수로 조정하세요.
-> 호출은 Chat Completions + `response_format: json_schema (strict)` 를 사용합니다. 오프라인 모드는 `--offline` 또는 `llm.enabled: false`.
-
-LLM 호출 지점 (모두 근거 검증 대상):
-
-| 단계 | 배포 | 출력 | 검증 |
-|---|---|---|---|
-| 보완 해석 | gpt-6 | 변경별 유형·사용자 의도·에이전트 갭 | change_id 실재/누락, 재분류 제한 |
-| 코드 개선안 | gpt-6 | 권고·코드 위치(quote)·수정안 | ID 실재, quote 위치, 패치 1회 일치·구문 |
-| 사용자 코드 보완 요약 | gpt-6 | hunk 별 보완 요약 | file+hunk 실재 |
-| 교차 검증 | gpt-6-mini | supported / partial / not_supported | rec_id 실재 |
-
----
-
-## 설정 파일
-
-`config/agents.example.yaml` 에 전체 예시가 있습니다. 핵심 항목:
-
-```yaml
-agents:
-  - id: requirements
-    name: 요구사항 정의 에이전트
-    stage: "2. 요구사항 정의"        # 보고서 정렬 기준 (제품개발 프로세스 단계)
-    output_type: xlsx               # xlsx | pptx | auto
-    repo: https://github.com/org/pd-agents.git   # 또는 로컬 경로
-    ref: main                       # 로컬 미커밋 작업 트리: WORKTREE
-    paths: [agents/requirements, common]          # 코드·프롬프트(.md/.txt/.yaml)·템플릿(.xlsx/.pptx) 경로
-    key_columns: {"요구사항정의서": "요구사항ID"}  # (선택) 행 대응 키 강제
-    code_compare: [{base: main, head: feature/kim, label: 김OO 보완}]
-comparisons:
-  - {agent: requirements, baseline: outputs/req_agent.xlsx, revised: final/req_kim.xlsx, revised_by: 김OO}
-```
-
-사설 저장소는 git credential helper 를 쓰거나 `RCA_GIT_AUTH_HEADER` 를 지정하세요. 원격 저장소는 `cache_dir/repos` 에 bare clone 후 `git show` 로 읽으며 체크아웃하지 않습니다.
+설정 파일 전체 예시는 [`config/agents.example.yaml`](config/agents.example.yaml) 를 참고하세요.
 
 ---
 
@@ -159,31 +213,21 @@ comparisons:
 
 | 파일 | 내용 |
 |---|---|
-| `report.md` | 요약 · 신뢰도 검증 · 에이전트별 차이/패턴/권고(코드 스니펫·패치) · 공통 패턴 · 기각 권고 부록 |
-| `report.html` | 단일 파일 대시보드 (검색 가능한 변경 목록, 라이트/다크) |
-| `report.xlsx` | `요약` `변경사항`(전체, 필터) `보완패턴` `개선권고` `코드추적` `코드보완` `무결성검증` 시트 |
-| `analysis.json` | 전체 결과 (alignment, 근거, 검증 내역 포함) — 다른 시스템 연동용 |
+| `report.html` | 단일 파일 대시보드 — 실행 결과/실패 배너, 신뢰도 KPI, 실패 내역, GPT 실행 정보(응답 모델·자동 적응·회로 차단), 에이전트별 권고·패치·변경 검색. 외부 리소스 없음 + CSP, 데이터 이스케이프·해시 기반 DOM id, 섹션별 오류 격리, 대량 행 제한 |
+| `report.md` | 같은 내용의 Markdown (코드 펜스 충돌 방지) |
+| `report.xlsx` | `요약` `변경사항` `보완패턴` `개선권고` `코드추적` `코드보완` `무결성검증` `실패내역` `GPT도구조회` |
+| `analysis.json` | 전체 결과 (status · exit_code · failures · strict 포함) |
 
-### 검출 변경 유형
-
-| Excel | PPT |
-|---|---|
-| 시트 추가/삭제/이름 변경 | 슬라이드 추가/삭제/순서 변경, 레이아웃 변경 |
-| 행 추가/삭제/순서 변경, 열 추가/삭제/순서 변경 | 도형 추가/삭제, 위치·크기 변경 |
-| 셀 값 수정(헤더=컬럼명 변경 포함), 수식 변경(참조 이동 표시) | 문단 추가/삭제/수정(단어 단위 diff, 수치 변화) |
-| 메모 추가/수정/삭제, 서식 변경(열 단위 집계) | 표 셀/행/열 변경 (엑셀과 같은 엔진), 차트·이미지 변경, 발표자 노트 |
-
-### 보완 유형
-
-내용 추가 · 내용 삭제 · 값·사실 정정 · 내용 보강·구체화 · 내용 재작성 · 표현 수정 · 구조 변경 · 검토 의견·메모 · 수식 변경 · 시각 자료 변경 · 서식·표기 변경
+모든 보고서는 임시 파일에 쓴 뒤 교체(원자적 쓰기)하며, 한 형식 작성이 실패해도 나머지는 작성되고 실패는 `report` 범주로 기록됩니다.
 
 ---
 
 ## 한계 (정확한 해석을 위해)
 
-- **무결성 검증의 범위**: 추출한 내용(셀 값·수식 문자열·문단 텍스트·표·노트·이미지 해시·차트 데이터) 기준으로 변경 목록이 완전하고 정확함을 보장합니다. 어떤 행이 어떤 행과 대응되는지의 *의미적* 판단은 대응 방식·점수로 별도 표시됩니다.
-- **비교하지 않는 항목**: 엑셀 병합 셀·데이터 유효성·조건부 서식 규칙·엑셀 차트, PPT 애니메이션·SmartArt 내부·글꼴 세부 서식.
-- **코드 추적**: 문자열 리터럴·프롬프트·템플릿 기반입니다. 런타임에 외부(DB·API)에서 오는 이름은 추적할 수 없으며 '추적 불가'로 표시됩니다. LLM 이 생성한 본문 내용은 코드에 없으므로, 내용 품질 문제는 같은 모듈의 생성 프롬프트를 수정 후보로 연결합니다(`same_module`, 낮은 점수로 표시).
+- **무결성 검증의 범위**: 추출한 내용(셀 값·수식 문자열·문단·표·노트·이미지 해시·차트 데이터) 기준으로 변경 목록의 완전성·정확성을 보장합니다. 어떤 행/문단이 어떤 것과 대응되는지의 *의미적* 판단은 대응 방식·점수로 별도 표시됩니다. 시트 속성(데이터 유효성 등)은 값 무결성과 별도로 비교합니다.
+- **비교하지 않는 항목**: 엑셀 차트·피벗, PPT 애니메이션·글꼴 세부 서식, Word 머리글/바닥글·텍스트 상자 위치, PDF 서식·이미지(텍스트만). HWP 등 다른 형식은 플러그인으로 추가하세요.
+- **코드 추적**: 문자열 리터럴·프롬프트·템플릿 기반입니다. 런타임에 외부(DB·API)에서 오는 이름은 '추적 불가'로 표시됩니다.
+- **GPT**: 실제 Azure 호출 경로는 가짜 전송 계층으로 테스트했습니다(오류·적응·도구·캐시 포함). 조직 배포에서는 먼저 `rca check-env --probe` 로 확인하세요.
 - **패치**: 인덱스는 줄바꿈을 LF 로 정규화하므로 CRLF 파일에는 `git apply --ignore-whitespace` 가 필요할 수 있습니다.
 
 ---
@@ -192,5 +236,6 @@ comparisons:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q          # 결정론 diff/무결성, 코드 추적·git, 검증기, 가짜 Azure 전송계층으로 GPT-6 경로(환각 응답 포함) 테스트
+pytest -q   # 결정론 diff/무결성(전 형식), 코드 추적·git, 검증기, .env 로더, 적응형 GPT 클라이언트(가짜 Azure),
+            # 도구 호출·플러그인, 실패/시간초과/strict, HTML 안정성(이스케이프·섹션 격리), CLI
 ```

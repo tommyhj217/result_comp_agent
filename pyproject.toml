@@ -4,21 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "result-comp-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "제품개발 프로세스 에이전트 산출물(PPT/Excel) 비교 · 사용자 보완사항 분석 · 에이전트 코드 추적/개선 권고 에이전트"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "openpyxl>=3.1",
   "python-pptx>=0.6.23",
+  "python-docx>=1.1",
   "openai>=1.40",
   "pydantic>=2.5",
   "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
+pdf = ["pypdf>=4.0"]
+encoding = ["charset-normalizer>=3.0"]
 entra = ["azure-identity>=1.15"]
-dev = ["pytest>=7"]
+all = ["pypdf>=4.0", "charset-normalizer>=3.0", "azure-identity>=1.15"]
+dev = ["pytest>=7", "pypdf>=4.0"]
 
 [project.scripts]
 rca = "result_comp_agent.cli:main"

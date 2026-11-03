@@ -57,6 +57,69 @@ def _headers_of(g: Grid) -> list[str]:
     return [N.collapse_ws(N.display(v)) for c, v in sorted(g.row_cells(h).items())]
 
 
+PROP_LABEL = {
+    "data_validation": "데이터 유효성(입력 규칙)",
+    "conditional_format": "조건부 서식",
+    "merged": "병합 셀",
+    "state": "시트 표시 상태",
+    "freeze_panes": "틀 고정",
+    "auto_filter": "자동 필터",
+}
+
+
+def _describe_prop(kind: str, item) -> str:
+    if kind == "data_validation":
+        _, typ, op, f1, f2, cols = item
+        rule = f1 + (f" ~ {f2}" if f2 else "")
+        return f"[{typ}{' ' + op if op else ''}] {rule} → 열 {', '.join(cols) or '-'}"
+    if kind == "conditional_format":
+        _, typ, op, formula, color, cols = item
+        return f"[{typ}{' ' + op if op else ''}] {formula}{' 채우기 ' + color if color else ''} → 열 {', '.join(cols) or '-'}"
+    if kind == "merged":
+        _, text, nr, nc = item
+        return f"'{text}' ({nr}행×{nc}열)"
+    return str(item)
+
+
+def diff_sheet_props(bp: dict, rp: dict, sheet: Grid, builder: ChangeBuilder) -> int:
+    """값과 별개인 시트 속성 비교. 행 삽입에 흔들리지 않도록 범위를 '열 헤더 이름'으로 비교한다."""
+    if not bp or not rp or "_error" in bp or "_error" in rp:
+        return 0
+    n = 0
+    for key in ("data_validation", "conditional_format", "merged"):
+        B = {tuple(x) for x in bp.get(key, [])}
+        R = {tuple(x) for x in rp.get(key, [])}
+        for action, items in (("added", sorted(R - B)), ("removed", sorted(B - R))):
+            for item in items:
+                desc = _describe_prop(key, item)
+                cols = list(item[-1]) if key in ("data_validation", "conditional_format") else []
+                builder.add(
+                    ChangeType.SHEET_PROPERTY_CHANGED,
+                    Location(artifact=ArtifactType.XLSX, container=sheet.grid_id, path=f"{sheet.name} · {PROP_LABEL[key]} {'추가' if action == 'added' else '삭제'}",
+                             part="sheet_property", sheet=sheet.name, column_label=", ".join(cols) or None),
+                    before=desc if action == "removed" else None,
+                    after=desc if action == "added" else None,
+                    format_only=(key != "data_validation"),
+                    detail={"property": key, "action": action, "value": list(item)},
+                    anchors=[Anchor(text=sheet.name, role="sheet")] + [Anchor(text=c, role="column") for c in cols[:3]],
+                )
+                n += 1
+    for key in ("state", "freeze_panes", "auto_filter"):
+        a, b = bp.get(key), rp.get(key)
+        if a != b:
+            fa = ", ".join(a) if isinstance(a, (list, tuple)) else a
+            fb = ", ".join(b) if isinstance(b, (list, tuple)) else b
+            builder.add(
+                ChangeType.SHEET_PROPERTY_CHANGED,
+                Location(artifact=ArtifactType.XLSX, container=sheet.grid_id, path=f"{sheet.name} · {PROP_LABEL[key]} 변경", part="sheet_property", sheet=sheet.name),
+                before=str(fa) if fa is not None else None, after=str(fb) if fb is not None else None, format_only=True,
+                detail={"property": key, "action": "changed", "before": a, "after": b},
+                anchors=[Anchor(text=sheet.name, role="sheet")],
+            )
+            n += 1
+    return n
+
+
 def diff_workbooks(
     base: WorkbookSnap,
     rev: WorkbookSnap,
@@ -107,6 +170,7 @@ def diff_workbooks(
             )
         al = diff_grids(b, r, builder, loc, context_anchors=[Anchor(text=r.name, role="sheet")], compare_styles=compare_styles)
         alignments.append(al)
+        diff_sheet_props(base.props.get(b.name, {}), rev.props.get(r.name, {}), r, builder)
         sheet_pairs_out.append({"base": b.name, "rev": r.name, "how": how, "grid": al.to_dict()})
 
     rev_names_order = [g.name for g in rev.sheets]

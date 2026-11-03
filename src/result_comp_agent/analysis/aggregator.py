@@ -19,8 +19,22 @@ def pattern_key(ch: Change) -> tuple[str, str, str]:
     loc = ch.location
     cat = ch.category or "?"
     cat_label = CATEGORIES.get(cat, cat)
-    if ch.artifact == ArtifactType.XLSX or (loc.part or "").startswith("table_"):
-        scope = f"'{loc.sheet}' 시트" if ch.artifact == ArtifactType.XLSX else f"슬라이드 '{loc.slide_title}' 표"
+    if ch.change_type == ChangeType.SHEET_PROPERTY_CHANGED:
+        from ..diff.excel_diff import PROP_LABEL
+
+        scope = f"'{loc.sheet}' 시트"
+        prop = ch.detail.get("property", "")
+        action = {"added": "추가", "removed": "삭제", "changed": "변경"}.get(ch.detail.get("action"), "")
+        desc = ch.after or ch.before or ""
+        return (f"prop|{scope}|{prop}|{ch.detail.get('action')}|{_n(desc)}", f"{scope} {PROP_LABEL.get(prop, prop)} {action}: {N.shorten(desc, 60)}", scope)
+    grid_like = ch.artifact in (ArtifactType.XLSX, ArtifactType.CSV) or (loc.part or "").startswith("table_")
+    if grid_like:
+        if ch.artifact in (ArtifactType.XLSX, ArtifactType.CSV):
+            scope = f"'{loc.sheet}' 시트"
+        elif ch.artifact == ArtifactType.PPTX:
+            scope = f"슬라이드 '{loc.slide_title}' 표"
+        else:
+            scope = f"'{loc.section or '문서'}' 섹션 표"
         col = loc.column_label or "-"
         if ct == ChangeType.COLUMN_ADDED:
             return f"col_add|{scope}|{_n(ch.after)}", f"{scope}에 '{ch.after}' 열 추가", scope
@@ -42,18 +56,27 @@ def pattern_key(ch: Change) -> tuple[str, str, str]:
             name = ch.after if ct != ChangeType.SHEET_REMOVED else ch.before
             return f"{ct.value}|{_n(name)}", f"시트 '{name}' {ch.type_label}", f"시트 {name}"
         return f"{ct.value}|{scope}|{_n(col)}", f"{scope} {ch.type_label}", scope
-    # PPT
-    title = loc.slide_title or "-"
+    # PPT / 흐름형 문서(Word·Markdown·텍스트·PDF)
+    title = loc.slide_title or loc.section or (f"p.{loc.page}" if loc.page else "문서")
+    if ct in (ChangeType.TEXT_ADDED, ChangeType.TEXT_REMOVED) and (loc.part or "") == "heading":
+        name = ch.after if ct == ChangeType.TEXT_ADDED else ch.before
+        k = "section_add" if ct == ChangeType.TEXT_ADDED else "section_del"
+        return f"{k}|{_n(name)}", f"'{N.shorten(name, 40)}' 섹션 {'추가' if k == 'section_add' else '삭제'}", f"섹션 '{N.shorten(name, 40)}'"
+    if ct in (ChangeType.COMMENT_ADDED, ChangeType.COMMENT_MODIFIED, ChangeType.COMMENT_REMOVED):
+        return f"comment|{_n(title)}", f"'{title}' 메모({ch.type_label})", f"'{title}'"
     if ct == ChangeType.SLIDE_ADDED:
         t = (ch.detail.get("content") or {}).get("title") or title
         return f"slide_add|{_n(t)}", f"'{t}' 슬라이드 추가", f"슬라이드 '{t}'"
     if ct == ChangeType.SLIDE_REMOVED:
         return f"slide_del|{_n(title)}", f"'{title}' 슬라이드 삭제", f"슬라이드 '{title}'"
+    if ct in (ChangeType.TABLE_ADDED, ChangeType.TABLE_REMOVED):
+        return f"{ct.value}|{_n(title)}", f"'{title}' {ch.type_label}", f"'{title}'"
     if ct == ChangeType.SLIDE_MOVED:
         return f"slide_move|{_n(title)}", f"'{title}' 슬라이드 순서 변경", f"슬라이드 '{title}'"
     if (loc.part or "") == "notes":
         return f"notes|{_n(title)}", f"'{title}' 발표자 노트 {ch.type_label}", f"슬라이드 '{title}' 노트"
-    return f"{ct.value}|{_n(title)}|{loc.part}|{cat}", f"'{title}' {ch.type_label} ({cat_label})", f"슬라이드 '{title}'"
+    hint = f"슬라이드 '{title}'" if ch.artifact == ArtifactType.PPTX else f"'{title}' 섹션"
+    return f"{ct.value}|{_n(title)}|{loc.part}|{cat}", f"{hint} {ch.type_label} ({cat_label})", hint
 
 
 def aggregate(agent_id: str, comparisons: list[ComparisonResult]) -> list[Pattern]:

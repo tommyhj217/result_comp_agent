@@ -21,7 +21,7 @@ class TargetAgent(BaseModel):
     name: str = ""
     stage: str = ""
     description: str = ""
-    output_type: Literal["xlsx", "pptx", "auto"] = "auto"
+    output_type: str = "auto"  # auto | xlsx | pptx | docx | csv | text | pdf | (플러그인 형식)
     repo: Optional[str] = None  # git URL 또는 로컬 경로
     ref: Optional[str] = None  # 브랜치/태그/커밋, 로컬 미커밋 상태는 WORKTREE
     paths: list[str] = Field(default_factory=list)  # 저장소 내 에이전트 코드 경로
@@ -50,21 +50,42 @@ class PairSpec(BaseModel):
 
 
 class LLMOptions(BaseModel):
-    enabled: Union[bool, Literal["auto"]] = "auto"
-    deployment_main: Optional[str] = None
+    """Azure 접속 정보(엔드포인트·키·배포·버전)는 .env 에서 읽는다. 여기서는 동작 옵션만 지정."""
+
+    enabled: Union[bool, Literal["auto"]] = "auto"  # auto: .env 설정이 완전하면 사용
+    deployment_main: Optional[str] = None  # .env 의 AZURE_OPENAI_DEPLOYMENT 대신 쓸 때만
     deployment_fast: Optional[str] = None
     reasoning_effort: Optional[str] = None
     api_version: Optional[str] = None
+    timeout_seconds: Optional[float] = None  # 호출 1회 제한 (기본: .env AZURE_OPENAI_TIMEOUT 또는 120)
+    budget_seconds: Optional[float] = None  # 실행 전체 LLM 시간 예산 (기본 1800, 0=무제한)
     supplement_batch_size: int = 40
     max_changes_per_agent: int = 300
     accept_reclassification_confidence: float = 0.7
     cross_check: bool = True
     max_context_chars: int = 60000
+    use_tools: bool = True  # GPT 함수 호출로 코드·문서·변경 추가 조회
+    max_tool_steps: int = 6
+    max_tool_calls: int = 20
+    tools: Optional[list[str]] = None  # 사용할 도구 이름 제한 (None = 등록된 전체)
 
 
 class DiffOptions(BaseModel):
     compare_styles: bool = True
     compare_geometry: bool = True
+    timeout_seconds: float = 300.0  # 비교쌍 1개 제한 시간 (0 = 제한 없음)
+    isolation: Literal["process", "inline"] = "process"  # process: 별도 프로세스에서 비교 → 시간 초과 시 강제 종료
+
+
+FailCategory = Literal["comparison", "integrity", "llm", "code", "report", "config"]
+
+
+class StrictOptions(BaseModel):
+    """strict 모드: 지정한 범주의 실패가 하나라도 있으면 실패 종료코드로 끝낸다 (보고서는 항상 작성)."""
+
+    enabled: bool = False
+    fail_on: list[FailCategory] = Field(default_factory=lambda: ["comparison", "integrity", "llm", "code", "report", "config"])
+    fail_fast: bool = False  # 첫 실패에서 분석 중단 (부분 보고서 작성)
 
 
 class RunConfig(BaseModel):
@@ -72,8 +93,11 @@ class RunConfig(BaseModel):
     output_dir: str = "rca_output"
     cache_dir: str = ".rca_cache"
     report_formats: list[str] = Field(default_factory=lambda: ["md", "xlsx", "json", "html"])
+    env_file: Optional[str] = None  # Azure 설정 .env 경로 (기본: 설정 파일 폴더 → 현재 폴더의 .env)
+    plugins: list[str] = Field(default_factory=list)  # 사용자 문서 핸들러/GPT 도구 모듈 또는 .py 경로
     llm: LLMOptions = Field(default_factory=LLMOptions)
     diff: DiffOptions = Field(default_factory=DiffOptions)
+    strict: StrictOptions = Field(default_factory=StrictOptions)
     agents: list[TargetAgent] = Field(default_factory=list)
     comparisons: list[PairSpec] = Field(default_factory=list)
     base_dir: str = "."

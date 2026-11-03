@@ -78,3 +78,32 @@ def sorted_changes(changes: list[Change]) -> list[Change]:
 
 def all_recs(a: AgentAnalysis) -> list[Recommendation]:
     return a.recommendations + a.rejected_recommendations
+
+
+# ------------------------------------------------------------------ 실패 표시용 라벨
+def failure_kind_label(kind: str) -> str:
+    from ..documents.base import DOC_ERROR_LABELS
+    from ..llm.errors import KIND_LABELS
+
+    extra = {
+        "integrity_fail": "무결성 검증 실패",
+        "git_error": "git 오류",
+        "git_clone": "저장소 클론 실패",
+        "ref_not_found": "브랜치/커밋 없음",
+        "no_files": "코드 파일 없음",
+        "index_error": "코드 인덱싱 실패",
+        "plugin_error": "플러그인 로드 실패",
+        "write_error": "보고서 작성 실패",
+    }
+    return extra.get(kind) or DOC_ERROR_LABELS.get(kind) or KIND_LABELS.get(kind) or kind
+
+
+CATEGORY_LABEL = {
+    "comparison": "산출물 비교",
+    "integrity": "무결성 검증",
+    "llm": "GPT(Azure OpenAI)",
+    "code": "에이전트 코드",
+    "report": "보고서",
+    "config": "설정/플러그인",
+}
+STATUS_TEXT = {"SUCCESS": "성공", "PARTIAL": "부분 실패", "FAILED": "실패"}

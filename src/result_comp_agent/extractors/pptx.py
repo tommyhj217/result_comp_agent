@@ -108,6 +108,31 @@ def _iter_shapes(shapes, prefix: str = ""):
             yield shp, prefix
 
 
+_DGM = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
+_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def _smartart_paragraphs(shp) -> Optional[list[Para]]:
+    """SmartArt(다이어그램) 텍스트는 별도 데이터 파트에 있어 python-pptx 가 읽지 않으므로 직접 추출."""
+    rel = next(shp._element.iter(f"{{{_DGM}}}relIds"), None)
+    if rel is None:
+        return None
+    rid = rel.get(f"{{{_R}}}dm")
+    if not rid:
+        return None
+    from lxml import etree
+
+    part = shp.part.related_part(rid)
+    root = etree.fromstring(part.blob)
+    out: list[Para] = []
+    for p in root.iter(f"{{{_A}}}p"):
+        t = N.clean_text("".join(x.text or "" for x in p.iter(f"{{{_A}}}t")))
+        if t.strip():
+            out.append((t, 0))
+    return out
+
+
 def _chart_sig(chart) -> dict[str, Any]:
     try:
         sig: dict[str, Any] = {"chart_type": str(chart.chart_type)}
@@ -179,6 +204,14 @@ def extract_presentation(path: str | Path) -> PresentationSnap:
             elif getattr(shp, "has_text_frame", False) and shp.has_text_frame:
                 s.kind = "text"
                 s.paragraphs = _paragraphs(shp.text_frame)
+            else:
+                try:
+                    sa = _smartart_paragraphs(shp)
+                except Exception:  # pragma: no cover - 손상된 다이어그램 파트
+                    sa = None
+                if sa is not None:
+                    s.kind = "smartart"
+                    s.paragraphs = sa
             shapes.append(s)
         if not title_text:
             first = next((s for s in shapes if s.kind == "text" and s.paragraphs), None)

@@ -105,6 +105,39 @@ def recommend_for_pattern(p: Pattern, changes: dict[str, Change], n_pairs: int) 
         problem = f"사용자가 '{t}' 슬라이드를 직접 추가함 ({sup}). 내용 예: {ex}"
         rec = f"섹션 목록에 '{t}'를 추가하고(삽입 위치 참조), 해당 섹션 생성 프롬프트를 작성하세요."
         structural, prefer = True, ("insertion_point",)
+    elif kind == "section_add":
+        t = first.after if first else "?"
+        title = f"'{N.shorten(t, 40)}' 섹션 생성 추가"
+        problem = f"사용자가 '{N.shorten(t, 40)}' 섹션을 직접 추가함 ({sup})."
+        rec = f"문서 섹션 구성(목차/섹션 목록)에 '{N.shorten(t, 40)}'를 추가하고(삽입 위치 참조), 해당 섹션 작성 지침을 프롬프트에 넣으세요."
+        structural, prefer = True, ("insertion_point", "prompt")
+    elif kind == "section_del":
+        t = first.before if first else "?"
+        title = f"'{N.shorten(t, 40)}' 섹션 생성 여부 재검토"
+        problem = f"사용자가 에이전트가 만든 '{N.shorten(t, 40)}' 섹션을 삭제함 ({sup})."
+        rec = "해당 섹션을 섹션 목록·프롬프트에서 제거하거나 조건부 생성으로 바꾸세요."
+        structural, prefer = True, ("section", "prompt")
+    elif kind == "prop":
+        prop = first.detail.get("property") if first else ""
+        action = first.detail.get("action") if first else ""
+        desc = (first.after or first.before or "") if first else ""
+        if prop == "data_validation" and action == "added":
+            title = f"{loc_hint} 입력 규칙(데이터 유효성) 코드화"
+            problem = f"사용자가 입력 규칙을 직접 추가함 ({sup}): {desc}"
+            rec = "생성 코드에서 openpyxl DataValidation 으로 같은 규칙(허용 값 목록·범위)을 적용하고, 프롬프트의 허용 값 정의와 일치시키세요."
+            structural, prefer = True, ("column", "sheet")
+        elif prop == "data_validation":
+            title = f"{loc_hint} 입력 규칙 변경 반영"
+            problem = f"사용자가 입력 규칙을 삭제/변경함 ({sup}): {desc}"
+            rec = "생성 코드의 데이터 유효성 규칙을 사용자 수정에 맞게 조정하세요."
+            structural, prefer = True, ("column", "sheet")
+        elif len(p.support_pairs) >= 2:
+            title = f"{loc_hint} 시트 서식/설정 코드화 ({prop})"
+            problem = f"사용자가 반복적으로 같은 시트 설정을 적용함 ({sup}): {desc}"
+            rec = "조건부 서식·틀 고정·필터·병합 등 사용자가 매번 하는 설정을 생성 코드에 추가하세요."
+            prefer = ("sheet",)
+        else:
+            return None
     elif kind == "slide_del":
         title = f"{loc_hint} 생성 여부 재검토"
         problem = f"사용자가 에이전트가 만든 슬라이드를 삭제함 ({sup})."
@@ -160,7 +193,7 @@ def recommend_for_pattern(p: Pattern, changes: dict[str, Change], n_pairs: int) 
         else:
             return None
         prefer = ("prompt", "text_line", "column")
-    elif kind in ("text_added", "text_modified", "text_removed", "shape_added", "shape_removed"):
+    elif kind in ("text_added", "text_modified", "text_removed", "shape_added", "shape_removed", "table_added", "table_removed"):
         cat = p.category
         title = f"{loc_hint} {CATEGORIES.get(cat, cat)} 반영"
         problem = f"사용자 보완 ({sup}). 예: {ex}"
@@ -199,7 +232,7 @@ def recommend_for_pattern(p: Pattern, changes: dict[str, Change], n_pairs: int) 
         title = p.title
         problem = f"사용자 보완 ({sup}). 예: {ex}"
         rec = "해당 위치의 생성 로직/프롬프트를 사용자 수정 형태에 맞게 조정하세요."
-    if p.category == "FORMAT_ONLY" and kind != "style":
+    if p.category == "FORMAT_ONLY" and kind not in ("style", "prop"):
         return None
     return Recommendation(
         id="",

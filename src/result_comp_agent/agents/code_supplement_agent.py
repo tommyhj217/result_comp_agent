@@ -1,6 +1,6 @@
 """CodeSupplementAgent — 사용자가 에이전트 코드(브랜치)에 직접 보완한 사항 요약.
 
-결정론적 요약(파일·함수·추가 리터럴)을 항상 만들고, GPT-6 가 가능하면 hunk 별 의도를 요약한다.
+결정론적 요약(파일·함수·추가 리터럴)을 항상 만들고, GPT 가 가능하면 hunk 별 의도를 요약한다.
 LLM 요약은 file + hunk_new_start 가 실제 diff 에 존재할 때만 verified=True.
 """
 from __future__ import annotations
@@ -86,7 +86,7 @@ class CodeSupplementAgent:
         try:
             res = self.llm.structured(
                 tier="main", system=CODE_SUPPLEMENT_SYSTEM, user=user, schema_name="code_supplements",
-                schema=CODE_SUPPLEMENT_SCHEMA, validate=CodeSupplementM.model_validate, feedback=feedback, purpose=f"code_supplement:{report.label}",
+                schema=CODE_SUPPLEMENT_SCHEMA, validate=CodeSupplementM.model_validate, feedback=feedback, purpose=f"code_supplement:{report.agent_id}",
             )
         except LLMError:
             return det

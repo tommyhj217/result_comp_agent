@@ -22,6 +22,8 @@ class WorkbookSnap:
     path: str
     sha256: str
     sheets: list[Grid] = field(default_factory=list)
+    props: dict[str, dict] = field(default_factory=dict)  # 시트명 → 속성(데이터 유효성/병합/조건부서식/표시상태/틀고정/필터)
+    meta: dict = field(default_factory=dict)
 
     def sheet(self, name: str) -> Optional[Grid]:
         return next((g for g in self.sheets if g.name == name), None)
@@ -134,4 +136,61 @@ def extract_workbook(
                     style=_style_sig(cell) if c is not None else None,
                 )
         snap.sheets.append(grid)
+        try:
+            snap.props[ws.title] = sheet_props(ws, grid)
+        except Exception as e:  # 속성 추출 실패는 값 비교에 영향 없음 → 기록만
+            snap.props[ws.title] = {"_error": str(e)}
     return snap
+
+
+def _cols_label(sqref, headers: dict[int, str]) -> tuple[str, ...]:
+    """범위(sqref)를 '열 헤더 이름' 집합으로 변환 → 행 삽입/삭제에 영향받지 않는 비교 키."""
+    from openpyxl.utils.cell import range_boundaries
+
+    cols: set[int] = set()
+    for part in str(sqref).split():
+        try:
+            c1, _, c2, _ = range_boundaries(part)
+        except Exception:
+            continue
+        if c1 is None:
+            continue
+        cols.update(range(c1, (c2 or c1) + 1))
+    from openpyxl.utils import get_column_letter
+
+    return tuple(headers.get(c) or get_column_letter(c) for c in sorted(cols))
+
+
+def sheet_props(ws, grid: Grid) -> dict:
+    from ..diff.grid import detect_header_row
+
+    hdr = detect_header_row(grid)
+    headers = {c: N.collapse_ws(N.display(grid.value(hdr, c))) for c in grid.cols()} if hdr else {}
+    headers = {c: h for c, h in headers.items() if h}
+    dv = set()
+    for v in getattr(ws.data_validations, "dataValidation", []) or []:
+        dv.add(("data_validation", v.type or "", v.operator or "", str(v.formula1 or ""), str(v.formula2 or ""), _cols_label(v.sqref, headers)))
+    cf = set()
+    for rng in ws.conditional_formatting:
+        cols = _cols_label(rng.sqref, headers)
+        for rule in rng.rules:
+            color = None
+            try:
+                if rule.dxf is not None and rule.dxf.fill is not None:
+                    color = _color(rule.dxf.fill.fgColor) or _color(rule.dxf.fill.bgColor)
+            except Exception:
+                color = None
+            cf.add(("conditional_format", rule.type or "", rule.operator or "", "|".join(rule.formula or []), color or "", cols))
+    merged = set()
+    for rng in ws.merged_cells.ranges:
+        tl = grid.cells.get((rng.min_row, rng.min_col))
+        merged.add(("merged", N.shorten(tl.display if tl else "", 40), rng.max_row - rng.min_row + 1, rng.max_col - rng.min_col + 1))
+    af = ws.auto_filter.ref if ws.auto_filter is not None else None
+    return {
+        "data_validation": sorted(dv),
+        "conditional_format": sorted(cf),
+        "merged": sorted(merged),
+        "state": ws.sheet_state,
+        "freeze_panes": str(ws.freeze_panes) if ws.freeze_panes else None,
+        "auto_filter": _cols_label(af, headers) if af else None,
+    }

@@ -1,7 +1,7 @@
 """SupplementAnalystAgent — 사용자 보완 사항 해석.
 
 1) 규칙 기반 분류(항상 수행, 결정론적)
-2) GPT-6 로 각 변경의 '사용자 의도'와 '에이전트가 놓친 점'을 해석 (선택)
+2) GPT 로 각 변경의 '사용자 의도'와 '에이전트가 놓친 점'을 해석 (선택)
    - 응답의 change_id 가 입력 배치에 없으면 거부 후 재요청, 20% 이상 누락이어도 재요청
    - 재분류는 내용 계열 유형끼리, 신뢰도 임계값 이상일 때만 허용
      (서식/구조/메모 같은 '사실' 분류는 LLM 이 바꿀 수 없음)
@@ -43,7 +43,7 @@ class SupplementAnalystAgent:
                 d[k] = c.detail[k]
         return d
 
-    def run(self, agent_label: str, changes: list[Change]) -> dict:
+    def run(self, agent_label: str, changes: list[Change], agent_id: Optional[str] = None) -> dict:
         classify_all(changes)
         stats = {"llm": False, "targets": 0, "covered": 0, "agreement": None, "reclassified": 0, "truncated": 0, "errors": []}
         if self.llm is None or not self.llm.active:
@@ -72,7 +72,7 @@ class SupplementAnalystAgent:
             try:
                 res = self.llm.structured(
                     tier="main", system=SUPPLEMENT_SYSTEM, user=user, schema_name="supplement_analysis",
-                    schema=SUPPLEMENT_SCHEMA, validate=SupplementM.model_validate, feedback=feedback, purpose=f"supplement:{agent_label}",
+                    schema=SUPPLEMENT_SCHEMA, validate=SupplementM.model_validate, feedback=feedback, purpose=f"supplement:{agent_id or agent_label}",
                 )
             except LLMError as e:
                 stats["errors"].append(str(e)[:300])

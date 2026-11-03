@@ -5,7 +5,7 @@
 2. 코드 위치: 파일 존재 · 줄 범위 · 인용문이 해당 위치에 실제로 존재 (다른 줄에 있으면 줄 번호 보정)
 3. 근거-코드 연관성: 인용 코드가 근거 변경의 추적 위치 근처이거나 근거 앵커 텍스트를 포함
 4. 수정안: 원본 스니펫이 파일에 정확히 1회 존재 + (Python) 적용 후 구문 검사 → 통과 시 unified diff 패치 생성
-5. (선택) GPT-6-mini 교차 검증: 증거가 권고를 뒷받침하는지 판정 → not_supported 인 LLM 권고는 기각
+5. (선택) GPT 교차 검증(AZURE_OPENAI_DEPLOYMENT_FAST 또는 같은 배포): 증거가 권고를 뒷받침하는지 판정 → not_supported 인 LLM 권고는 기각
 
 신뢰도 = 0.4·증거강도 + 0.3·코드근거 + 0.1·수정안유효성 + 0.2·일관성  (구성요소를 그대로 보고)
 """
@@ -27,6 +27,7 @@ class VerifierAgent:
     def __init__(self, llm: Optional[LLMClient] = None, cross_check: bool = True):
         self.llm = llm
         self.cross_check = cross_check
+        self._agent_id: Optional[str] = None
 
     # ------------------------------------------------------------------ 코드 위치
     def _check_ref(self, ref: CodeRef, index: Optional[CodeIndex]) -> tuple[bool, str]:
@@ -155,7 +156,7 @@ class VerifierAgent:
             res = self.llm.structured(
                 tier="fast", system=CROSSCHECK_SYSTEM,
                 user=f"[대상 에이전트] {agent_label}\n" + json.dumps(items, ensure_ascii=False, indent=1),
-                schema_name="cross_check", schema=CROSSCHECK_SCHEMA, validate=CrossCheckM.model_validate, feedback=feedback, purpose=f"crosscheck:{agent_label}",
+                schema_name="cross_check", schema=CROSSCHECK_SCHEMA, validate=CrossCheckM.model_validate, feedback=feedback, purpose=f"crosscheck:{self._agent_id or agent_label}",
             )
         except LLMError as e:
             return f"교차 검증 실패: {str(e)[:200]}"
@@ -216,7 +217,9 @@ class VerifierAgent:
         patterns: list[Pattern],
         agent_label: str,
         notes: list[str],
+        agent_id: Optional[str] = None,
     ) -> tuple[list[Recommendation], list[Recommendation]]:
+        self._agent_id = agent_id
         for r in recs:
             self._verify_one(r, index, changes)
         live = [r for r in recs if r.verification.status != "REJECTED"]

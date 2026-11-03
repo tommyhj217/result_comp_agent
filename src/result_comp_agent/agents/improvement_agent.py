@@ -1,7 +1,7 @@
 """ImprovementAdvisorAgent — 에이전트 코드 개선안 도출.
 
 * 규칙 기반 권고(항상)는 orchestrator 가 analysis.recommender 로 생성
-* GPT-6 에는 '패턴(증거) + 규칙 권고 + 실제 코드 스니펫(줄 번호 포함) + 사용자 코드 보완'을 제공하고
+* GPT 에는 '패턴(증거) + 규칙 권고 + 실제 코드 스니펫(줄 번호 포함) + 사용자 코드 보완'을 제공하고
   구체적 코드 위치·수정안을 요청한다.
 * 응답 검증 루프: 존재하지 않는 change_id, 코드에 없는 인용문이 많으면 그 목록을 알려주고 재작성 요청
 """
@@ -65,11 +65,28 @@ def build_code_context(
     return "\n\n".join(out)
 
 
+TOOLS_HINT = """
+
+[도구 사용]
+- 제공된 스니펫만으로 부족하면 도구로 직접 조회하십시오: search_code(문구 위치 찾기), read_code(줄 번호 포함 원문),
+  list_prompts, get_change/list_changes(변경 상세), read_document/search_documents(원본·수정본 문서), get_pattern, get_code_diff.
+- 코드 인용(quote)과 수정안 original_snippet 은 read_code 로 확인한 원문을 그대로 복사하십시오.
+- 조사가 끝나면 도구 호출 없이 답하십시오 (최종 JSON 은 다음 단계에서 요청합니다)."""
+
+
 class ImprovementAdvisorAgent:
-    def __init__(self, llm: Optional[LLMClient], max_patterns: int = 25, max_context_chars: int = 60000):
+    def __init__(
+        self, llm: Optional[LLMClient], max_patterns: int = 25, max_context_chars: int = 60000,
+        use_tools: bool = True, registry=None, max_tool_steps: int = 6, max_tool_calls: int = 20,
+    ):
         self.llm = llm
         self.max_patterns = max_patterns
         self.max_context_chars = max_context_chars
+        self.use_tools = use_tools
+        self.registry = registry
+        self.max_tool_steps = max_tool_steps
+        self.max_tool_calls = max_tool_calls
+        self.last_trace: list[dict] = []
 
     def run(
         self,
@@ -83,7 +100,9 @@ class ImprovementAdvisorAgent:
         n_pairs: int,
         code_diffs: list[CodeDiffReport],
         notes: list[str],
+        tool_ctx=None,
     ) -> list[Recommendation]:
+        self.last_trace = []
         if self.llm is None or not self.llm.active:
             return []
         if index is None:
@@ -139,13 +158,24 @@ class ImprovementAdvisorAgent:
                         problems.append(f"권고#{i + 1}: {loc.file}:{loc.line_start} 인용문을 코드에서 찾을 수 없음({st})")
             return problems
 
+        use_tools = self.use_tools and self.registry is not None and tool_ctx is not None and self.registry.names()
         try:
-            res = self.llm.structured(
-                tier="main", system=IMPROVEMENT_SYSTEM, user=user, schema_name="agent_improvements",
-                schema=IMPROVEMENT_SCHEMA, validate=ImprovementM.model_validate, feedback=feedback, purpose=f"improvement:{agent_id}",
-            )
+            if use_tools:
+                res, trace, note = self.llm.structured_with_tools(
+                    tier="main", system=IMPROVEMENT_SYSTEM + TOOLS_HINT, user=user, schema_name="agent_improvements",
+                    schema=IMPROVEMENT_SCHEMA, validate=ImprovementM.model_validate, feedback=feedback, purpose=f"improvement:{agent_id}",
+                    registry=self.registry, ctx=tool_ctx, max_steps=self.max_tool_steps, max_tool_calls=self.max_tool_calls,
+                )
+                self.last_trace = trace
+                if note and note != "캐시":
+                    notes.append(note)
+            else:
+                res = self.llm.structured(
+                    tier="main", system=IMPROVEMENT_SYSTEM, user=user, schema_name="agent_improvements",
+                    schema=IMPROVEMENT_SCHEMA, validate=ImprovementM.model_validate, feedback=feedback, purpose=f"improvement:{agent_id}",
+                )
         except LLMError as e:
-            notes.append(f"LLM 개선안 생성 실패: {str(e)[:300]}")
+            notes.append(f"GPT 개선안 생성 실패({e.label}): {str(e)[:300]}")
             return []
         out = []
         for i, r in enumerate(res.recommendations, start=1):

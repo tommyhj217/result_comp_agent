@@ -12,12 +12,23 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ArtifactType(str, Enum):
+    """기본 제공 문서 형식. 플러그인 핸들러는 임의의 문자열 형식을 쓸 수 있다(모델 필드는 str)."""
+
     XLSX = "xlsx"
     PPTX = "pptx"
+    DOCX = "docx"
+    CSV = "csv"
+    TEXT = "text"
+    PDF = "pdf"
+
+
+def art(v) -> str:
+    """ArtifactType 또는 문자열 → 문자열."""
+    return getattr(v, "value", v)
 
 
 class ChangeType(str, Enum):
@@ -50,6 +61,10 @@ class ChangeType(str, Enum):
     TEXT_MODIFIED = "text_modified"
     IMAGE_REPLACED = "image_replaced"
     CHART_MODIFIED = "chart_modified"
+    # 문서(Word/Markdown/PDF) 및 시트 속성
+    TABLE_ADDED = "table_added"
+    TABLE_REMOVED = "table_removed"
+    SHEET_PROPERTY_CHANGED = "sheet_property_changed"
 
 
 CHANGE_TYPE_LABELS: dict[str, str] = {
@@ -79,13 +94,16 @@ CHANGE_TYPE_LABELS: dict[str, str] = {
     "text_modified": "문단 수정",
     "image_replaced": "이미지 교체",
     "chart_modified": "차트 변경",
+    "table_added": "표 추가",
+    "table_removed": "표 삭제",
+    "sheet_property_changed": "시트 속성 변경",
 }
 
 
 class Location(BaseModel):
     """변경 위치. ``path`` 는 사람이 읽는 경로, 나머지는 구조화된 좌표."""
 
-    artifact: ArtifactType
+    artifact: str
     container: str  # 무결성 검증 단위 ID (예: "sheet:요구사항", "slide[3]/shape[5]/text")
     path: str
     part: str = ""  # sheet | cell | header | row | column | slide | shape | text | notes | table
@@ -98,6 +116,13 @@ class Location(BaseModel):
     base_slide_index: Optional[int] = None
     slide_title: Optional[str] = None
     shape_name: Optional[str] = None
+    section: Optional[str] = None  # 문서형(Word/Markdown/PDF)의 소속 제목(섹션)
+    page: Optional[int] = None
+
+    @field_validator("artifact", mode="before")
+    @classmethod
+    def _art(cls, v):
+        return art(v)
 
 
 class Anchor(BaseModel):
@@ -129,7 +154,7 @@ class Change(BaseModel):
     id: str
     pair_id: str
     agent_id: str
-    artifact: ArtifactType
+    artifact: str
     change_type: ChangeType
     location: Location
     before: Optional[str] = None
@@ -149,6 +174,11 @@ class Change(BaseModel):
     code_refs: list[CodeRef] = Field(default_factory=list)
     code_change_refs: list[CodeRef] = Field(default_factory=list)
 
+    @field_validator("artifact", mode="before")
+    @classmethod
+    def _art(cls, v):
+        return art(v)
+
     @property
     def type_label(self) -> str:
         return CHANGE_TYPE_LABELS.get(self.change_type.value, self.change_type.value)
@@ -165,7 +195,7 @@ class IntegrityReport(BaseModel):
 class ComparisonResult(BaseModel):
     pair_id: str
     agent_id: str
-    artifact: ArtifactType
+    artifact: str
     baseline_path: str
     revised_path: str
     baseline_sha256: str
@@ -177,6 +207,35 @@ class ComparisonResult(BaseModel):
     alignment: dict[str, Any] = Field(default_factory=dict)
     integrity: IntegrityReport
     stats: dict[str, Any] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+    seconds: Optional[float] = None
+
+    @field_validator("artifact", mode="before")
+    @classmethod
+    def _art(cls, v):
+        return art(v)
+
+
+class StepFailure(BaseModel):
+    """실행 단계 실패 — 보고서에 '실패'로 명시하고 strict 판정에 사용."""
+
+    category: Literal["comparison", "integrity", "llm", "code", "report", "config"]
+    stage: str  # diff | code.load | code.branch | llm.supplement | llm.improvement | llm.crosscheck | llm.code_supplement | report.html ...
+    kind: str  # timeout | file_not_found | unsupported | parse_error | auth | not_found | rate_limit | validation | ...
+    target: str  # 비교쌍 ID / 에이전트 ID / 파일
+    message: str
+    impact: str = ""  # 결과에 미친 영향 (예: '규칙 기반 결과만 표시')
+
+
+class FailedComparison(BaseModel):
+    pair_id: str
+    agent_id: str
+    baseline_path: str
+    revised_path: str
+    revised_by: Optional[str] = None
+    kind: str
+    message: str
+    seconds: Optional[float] = None
 
 
 class Pattern(BaseModel):
@@ -294,6 +353,9 @@ class AgentAnalysis(BaseModel):
     code_diffs: list[CodeDiffReport] = Field(default_factory=list)
     trace_stats: dict[str, Any] = Field(default_factory=dict)
     llm_notes: list[str] = Field(default_factory=list)
+    failures: list[StepFailure] = Field(default_factory=list)
+    failed_comparisons: list[FailedComparison] = Field(default_factory=list)
+    tool_trace: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AnalysisResult(BaseModel):
@@ -304,3 +366,8 @@ class AnalysisResult(BaseModel):
     agents: list[AgentAnalysis] = Field(default_factory=list)
     cross_agent_patterns: list[dict[str, Any]] = Field(default_factory=list)
     reliability: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["SUCCESS", "PARTIAL", "FAILED"] = "SUCCESS"
+    failures: list[StepFailure] = Field(default_factory=list)
+    strict: dict[str, Any] = Field(default_factory=dict)  # {enabled, fail_on, violated, exit_code, aborted}
+    exit_code: int = 0
+    plugins: list[str] = Field(default_factory=list)

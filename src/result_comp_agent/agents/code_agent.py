@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..code.code_diff import build_code_diff, correlate_changes, find_in_code_diff
-from ..code.git_source import GitRepo
+from ..code.git_source import GitError, GitRepo
 from ..code.indexer import CodeIndex
 from ..code.tracer import CodeTracer
 from ..config import TargetAgent
@@ -24,18 +24,29 @@ class CodeAgent:
         self.cache_dir = Path(cache_dir) / "repos"
         self.supplement_agent = supplement_agent
 
-    def load(self, agent: TargetAgent, repo_src: Optional[str]) -> tuple[Optional[GitRepo], Optional[CodeIndex], Optional[str]]:
+    def load(self, agent: TargetAgent, repo_src: Optional[str]) -> tuple[Optional[GitRepo], Optional[CodeIndex], Optional[str], Optional[str]]:
+        """반환: (repo, index, 메시지, 실패종류). repo 미설정은 실패가 아니므로 종류 None."""
         if not repo_src:
-            return None, None, "repo 미설정 — 코드 추적 생략"
+            return None, None, "repo 미설정 — 코드 추적 생략", None
         try:
             repo = GitRepo(repo_src, self.cache_dir)
-            commit = repo.resolve(agent.ref)
-            index = CodeIndex.build(repo, commit, agent.paths, agent.id)
-            if not index.files and not index.binary_files:
-                return repo, index, f"지정 경로 {agent.paths} 에서 인덱싱할 코드 파일을 찾지 못함"
-            return repo, index, None
         except Exception as e:
-            return None, None, f"코드 로드 실패: {e}"
+            return None, None, f"저장소 초기화 실패: {e}", "git_error"
+        try:
+            commit = repo.resolve(agent.ref)
+        except GitError as e:
+            msg = str(e)
+            kind = "ref_not_found" if "ref 를 찾을 수 없음" in msg else ("git_clone" if "clone" in msg else "git_error")
+            return None, None, f"코드 로드 실패: {msg}", kind
+        except Exception as e:
+            return None, None, f"코드 로드 실패: {e}", "git_error"
+        try:
+            index = CodeIndex.build(repo, commit, agent.paths, agent.id)
+        except Exception as e:
+            return repo, None, f"코드 인덱싱 실패: {e}", "index_error"
+        if not index.files and not index.binary_files:
+            return repo, index, f"지정 경로 {agent.paths} 에서 인덱싱할 코드 파일을 찾지 못함", "no_files"
+        return repo, index, None, None
 
     @staticmethod
     def trace(index: CodeIndex, comps: list[ComparisonResult]) -> dict:

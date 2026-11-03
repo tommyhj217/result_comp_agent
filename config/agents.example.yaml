@@ -8,19 +8,33 @@ output_dir: ./rca_output          # 보고서 출력 폴더
 cache_dir: ./.rca_cache           # git 클론 / LLM 응답 캐시 (재현성)
 report_formats: [md, xlsx, json, html]
 
+# env_file: ./.env                # Azure OpenAI 접속 정보(.env) 경로 — 생략 시 이 파일 폴더 → 현재 폴더의 .env 자동 탐색
+plugins: []                       # 직접 만든 문서 핸들러/GPT 도구 (예: [../examples/plugins/sample_plugin.py])
+
 llm:
-  enabled: auto                   # auto | true | false  (auto: AZURE_OPENAI_* 가 있으면 사용)
-  deployment_main: gpt-6          # 해석·개선안 (Azure 배포 이름)
-  deployment_fast: gpt-6-mini     # 교차 검증
-  reasoning_effort: medium        # low | medium | high
-  cross_check: true               # GPT-6-mini 로 권고-증거 교차검증
-  supplement_batch_size: 40       # 변경 해석 배치 크기
+  enabled: auto                   # auto: .env 의 4개 키가 모두 있으면 GPT 사용 | true: 필수 | false: 미사용
+  # 접속 정보(엔드포인트·키·배포·버전)는 .env 에서 읽습니다. 아래는 동작 옵션.
+  timeout_seconds: 120            # GPT 호출 1회 제한 (초과 시 재시도 후 '시간 초과' 실패로 표시)
+  budget_seconds: 1800            # 실행 전체 GPT 시간 예산 (0 = 무제한)
+  cross_check: true               # GPT 교차검증 (AZURE_OPENAI_DEPLOYMENT_FAST 또는 같은 배포)
+  use_tools: true                 # GPT 함수 호출로 코드·문서·변경 추가 조회
+  max_tool_steps: 6
+  max_tool_calls: 20
+  # tools: [search_code, read_code, read_document]   # 사용할 도구 제한 (생략 = 전체)
+  supplement_batch_size: 40
   max_changes_per_agent: 300      # 초과분은 규칙 분류만 적용 (보고서에 명시)
   accept_reclassification_confidence: 0.7
 
 diff:
-  compare_styles: true            # 엑셀 서식 변경(채우기/굵게 등) 보고 (format_only 로 분리)
+  compare_styles: true            # 엑셀 서식 변경 보고 (format_only 로 분리)
   compare_geometry: true          # PPT 도형 위치/크기 변경 보고 (format_only 로 분리)
+  timeout_seconds: 300            # 비교쌍 1개 제한 시간 — 초과 시 프로세스 종료 후 '비교 시간 초과' 실패
+  isolation: process              # process(권장): 별도 프로세스에서 비교 | inline
+
+strict:                           # 실패 처리 정책 (CLI --strict / --strict-on / --fail-fast 로도 지정)
+  enabled: false
+  fail_on: [comparison, integrity, llm, code, report, config]
+  fail_fast: false                # 첫 실패에서 중단 (부분 보고서는 작성)
 
 # 분석 대상 에이전트 (제품개발 프로세스 단계별)
 agents:
@@ -44,6 +58,14 @@ agents:
     code_compare:                                     # (선택) 사용자가 코드에 직접 보완한 브랜치
       - {base: main, head: feature/kim-risk-column, label: "김OO 보완 브랜치"}
 
+  - id: design_doc
+    name: 설계서 에이전트
+    stage: "3. 설계"
+    output_type: docx               # xlsx | pptx | docx | csv | text | pdf | auto
+    repo: https://github.com/your-org/pd-agents.git
+    ref: main
+    paths: [agents/design, common]
+
   - id: test_plan
     name: 테스트케이스 에이전트
     stage: "5. 테스트"
@@ -59,3 +81,5 @@ comparisons:
   - {agent: requirements,    baseline: outputs/요구사항_agent.xlsx, revised: final/요구사항_이OO.xlsx, revised_by: 이OO}
   # 두 산출물이 모두 에이전트 생성물이고 코드 버전이 다르면 ref 를 지정 → '코드 변경으로 설명되는 차이' 식별
   - {agent: test_plan, baseline: outputs/tc_v1.xlsx, revised: outputs/tc_v2.xlsx, baseline_ref: v1.0, revised_ref: v1.1}
+  # Word·CSV·Markdown·PDF 산출물도 같은 방식으로 비교 (형식은 확장자로 자동 판별)
+  - {agent: design_doc, baseline: outputs/설계서_agent.docx, revised: final/설계서_최종.docx, revised_by: 박OO}

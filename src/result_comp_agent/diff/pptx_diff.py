@@ -51,7 +51,7 @@ def _geom_sim(a: ShapeSnap, b: ShapeSnap, W: int, H: int) -> float:
 def _shape_score(a: ShapeSnap, b: ShapeSnap, W: int, H: int) -> float:
     if a.kind != b.kind:
         return 0.0
-    if a.kind in ("text", "table"):
+    if a.kind in ("text", "table", "smartart"):
         ts = text_sim(a.text, b.text) if (a.text or b.text) else 1.0
     elif a.kind == "picture":
         ts = 1.0 if a.image_sha1 == b.image_sha1 else 0.3
@@ -288,7 +288,7 @@ def diff_presentations(base: PresentationSnap, rev: PresentationSnap, builder: C
             prefix = f"{_slide_label(rs)} > {b.name}"
             is_title = (b.placeholder or "").upper().startswith(("TITLE", "CENTER_TITLE"))
             shape_pairs_out.append({"base": a.key, "rev": b.key, "score": round(sc, 4)})
-            if b.kind == "text":
+            if b.kind in ("text", "smartart"):
                 ppairs = diff_paragraphs(
                     ctx, a.paragraphs, b.paragraphs, container=container + "/text", path_prefix=prefix, part="text",
                     rs=rs, bs=bs, shape_name=b.name, anchors=sec_anchors, is_title=is_title,

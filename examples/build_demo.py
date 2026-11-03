@@ -193,12 +193,14 @@ CONFIG = """# 데모 분석 설정 — build_demo.py 가 생성
 project: "플랜잇 제품개발 에이전트 산출물 분석 (데모)"
 output_dir: ./rca_output
 cache_dir: ./.rca_cache
+# Azure OpenAI 접속 정보는 이 폴더(또는 현재 폴더)의 .env 에서 읽습니다:
+#   AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY / AZURE_OPENAI_DEPLOYMENT / AZURE_OPENAI_API_VERSION
 llm:
-  enabled: auto            # auto: AZURE_OPENAI_* 환경변수가 있으면 GPT-6 사용, 없으면 규칙 기반
-  deployment_main: gpt-6
-  deployment_fast: gpt-6-mini
-  reasoning_effort: medium
+  enabled: auto            # auto: .env 설정이 완전하면 GPT 사용, 없으면 규칙 기반
   cross_check: true
+  use_tools: true
+diff:
+  timeout_seconds: 300
 agents:
   - id: market_analysis
     name: 시장분석 에이전트

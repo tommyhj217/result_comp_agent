@@ -52,7 +52,7 @@ KIND_GROUP = {"literal": "code", "fstring": "code", "prompt": "prompt", "docstri
 STRUCTURAL_TYPES = {
     ChangeType.COLUMN_ADDED, ChangeType.COLUMN_REMOVED, ChangeType.COLUMN_MOVED, ChangeType.SHEET_ADDED, ChangeType.SHEET_REMOVED,
     ChangeType.SHEET_RENAMED, ChangeType.SLIDE_MOVED, ChangeType.ROW_MOVED, ChangeType.LAYOUT_CHANGED, ChangeType.STYLE_MODIFIED,
-    ChangeType.SHAPE_GEOMETRY_CHANGED,
+    ChangeType.SHAPE_GEOMETRY_CHANGED, ChangeType.SHEET_PROPERTY_CHANGED, ChangeType.TABLE_ADDED, ChangeType.TABLE_REMOVED,
 }
 
 
@@ -188,7 +188,8 @@ class CodeTracer:
             for m in best_by_kind.values():
                 refs.append(self._ref(m, a, m.score * cfg.weight))
         ct = change.change_type
-        if ct in (ChangeType.COLUMN_ADDED, ChangeType.SLIDE_ADDED, ChangeType.SHEET_ADDED):
+        added_heading = ct == ChangeType.TEXT_ADDED and (change.location.part or "") == "heading"
+        if ct in (ChangeType.COLUMN_ADDED, ChangeType.SLIDE_ADDED, ChangeType.SHEET_ADDED) or added_heading:
             d = change.detail
             siblings = d.get("sibling_headers") or d.get("sibling_titles") or d.get("sibling_sheets") or []
             left = next((a.text for a in change.anchors if a.role == "neighbor_left"), None)
