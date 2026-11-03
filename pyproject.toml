@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "result-comp-agent"
+version = "0.1.0"
+description = "제품개발 프로세스 에이전트 산출물(PPT/Excel) 비교 · 사용자 보완사항 분석 · 에이전트 코드 추적/개선 권고 에이전트"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "openpyxl>=3.1",
+  "python-pptx>=0.6.23",
+  "openai>=1.40",
+  "pydantic>=2.5",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+entra = ["azure-identity>=1.15"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+rca = "result_comp_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

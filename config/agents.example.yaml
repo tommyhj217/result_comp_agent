@@ -1,0 +1,61 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# result_comp_agent 설정 예시
+#   rca run -c config/agents.example.yaml
+# 상대 경로는 이 파일 위치 기준으로 해석됩니다.
+# ─────────────────────────────────────────────────────────────────────────────
+project: "제품개발 프로세스 에이전트 산출물 분석"
+output_dir: ./rca_output          # 보고서 출력 폴더
+cache_dir: ./.rca_cache           # git 클론 / LLM 응답 캐시 (재현성)
+report_formats: [md, xlsx, json, html]
+
+llm:
+  enabled: auto                   # auto | true | false  (auto: AZURE_OPENAI_* 가 있으면 사용)
+  deployment_main: gpt-6          # 해석·개선안 (Azure 배포 이름)
+  deployment_fast: gpt-6-mini     # 교차 검증
+  reasoning_effort: medium        # low | medium | high
+  cross_check: true               # GPT-6-mini 로 권고-증거 교차검증
+  supplement_batch_size: 40       # 변경 해석 배치 크기
+  max_changes_per_agent: 300      # 초과분은 규칙 분류만 적용 (보고서에 명시)
+  accept_reclassification_confidence: 0.7
+
+diff:
+  compare_styles: true            # 엑셀 서식 변경(채우기/굵게 등) 보고 (format_only 로 분리)
+  compare_geometry: true          # PPT 도형 위치/크기 변경 보고 (format_only 로 분리)
+
+# 분석 대상 에이전트 (제품개발 프로세스 단계별)
+agents:
+  - id: market_analysis
+    name: 시장분석 에이전트
+    stage: "1. 기획"
+    output_type: pptx
+    repo: https://github.com/your-org/pd-agents.git   # 원격 URL 또는 로컬 경로
+    ref: main                                         # 브랜치/태그/커밋 (로컬 미커밋 상태: WORKTREE)
+    paths: [agents/planning, common, prompts]         # 저장소 내 에이전트 코드·프롬프트·템플릿 경로
+
+  - id: requirements
+    name: 요구사항 정의 에이전트
+    stage: "2. 요구사항 정의"
+    output_type: xlsx
+    repo: https://github.com/your-org/pd-agents.git
+    ref: main
+    paths: [agents/requirements, common, templates/requirements.xlsx]
+    header_rows: {"요구사항정의서": 3}                 # (선택) 헤더 행 강제 지정, "*" = 전체 시트
+    key_columns: {"요구사항정의서": "요구사항ID"}      # (선택) 행 대응 키 열 강제 지정
+    code_compare:                                     # (선택) 사용자가 코드에 직접 보완한 브랜치
+      - {base: main, head: feature/kim-risk-column, label: "김OO 보완 브랜치"}
+
+  - id: test_plan
+    name: 테스트케이스 에이전트
+    stage: "5. 테스트"
+    output_type: xlsx
+    repo: https://github.com/your-org/pd-agents.git
+    ref: main
+    paths: [agents/testing, common]
+
+# 비교쌍: 에이전트 원본 산출물 vs 사용자 최종본
+comparisons:
+  - {agent: market_analysis, baseline: outputs/시장분석_agent.pptx, revised: final/시장분석_김OO.pptx, revised_by: 김OO}
+  - {agent: requirements,    baseline: outputs/요구사항_agent.xlsx, revised: final/요구사항_김OO.xlsx, revised_by: 김OO}
+  - {agent: requirements,    baseline: outputs/요구사항_agent.xlsx, revised: final/요구사항_이OO.xlsx, revised_by: 이OO}
+  # 두 산출물이 모두 에이전트 생성물이고 코드 버전이 다르면 ref 를 지정 → '코드 변경으로 설명되는 차이' 식별
+  - {agent: test_plan, baseline: outputs/tc_v1.xlsx, revised: outputs/tc_v2.xlsx, baseline_ref: v1.0, revised_ref: v1.1}
